@@ -10,6 +10,7 @@ import torch.nn as nn
 import torch.optim as optim
 import time
 from collections import namedtuple
+import matplotlib.pyplot as plt
 
 class QNetwork(nn.Module):
 
@@ -24,6 +25,7 @@ class QNetwork(nn.Module):
         self.replay_memory_size = 10000
         self.num_iterations = 2000000
         self.minibatch_size = 32
+        self.episode_durations = []
         
         # Use gpu if it is availiable
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -76,6 +78,11 @@ class ReplayMemory:
 
     def __len__(self):
         return len(self.memory)
+
+def init_weights(m):
+    if type(m) == nn.Conv2d or type(m) == nn.Linear:
+        torch.nn.init.uniform_(m.weight, -0.01, 0.01)
+        m.bias.data.fill_(0.01)
 
 def image_to_tensor(image):
     """Converts image to a PyTorch tensor"""
@@ -132,8 +139,11 @@ def train(net, start):
 
     # Epsilon annealing
     epsilon_decrements = np.linspace(net.initial_epsilon, net.final_epsilon, net.num_iterations)
+
+    t = 0
     
     # Train Loop
+    print("Start Episode", 0)
     for iteration in range(net.num_iterations):
         # Get output from the neural network
         output = net(state)[0]
@@ -215,12 +225,74 @@ def train(net, start):
         if iteration % 25000 == 0:
             torch.save(net, "model_weights/current_model_" + str(iteration) + ".pth")
 
-        print("iteration:", iteration, "elapsed time:", time.time() - start, "epsilon:", epsilon, "action:",
-              action_index.cpu().detach().numpy(), "reward:", reward.numpy()[0][0], "Q max:",
-              np.max(output.cpu().detach().numpy()))
+        if iteration % 100 == 0:
+            print("iteration:", iteration, "elapsed time:", time.time() - start, "epsilon:", epsilon, "action:",
+                action_index.cpu().detach().numpy(), "reward:", reward.numpy()[0][0], "Q max:",
+                np.max(output.cpu().detach().numpy()))
+
+        t += 1
+
+        # Plot duration
+        if terminal:
+            print("Start Episode", len(net.episode_durations) + 1)
+            net.episode_durations.append(t)
+            plot_durations(net.episode_durations)
+            t = 0
+
+
+def plot_durations(episode_durations):
+    """Plot durations of episodes and average over last 100 episodes"""
+    plt.figure(1)
+    plt.clf()
+    durations_t = torch.tensor(episode_durations, dtype=torch.float)
+    plt.title('Training...')
+    plt.xlabel('Episode')
+    plt.ylabel('Duration')
+    plt.plot(durations_t.numpy())
+    # Take 100 episode averages and plot them too
+    if len(durations_t) >= 100:
+        means = durations_t.unfold(0, 100, 1).mean(1).view(-1)
+        means = torch.cat((torch.zeros(99), means))
+        plt.plot(means.numpy())
+
+    plt.pause(0.001)
+
+def test(net):
+    game_state = game.GameState()
+
+    action = torch.zeros([model.number_of_actions], dtype=torch.float32)
+    action[0] = 1
+    image_data, reward, terminal = game_state.frame_step(action)
+    image_data = resize_and_bgr2gray(image_data)
+    image_data = image_to_tensor(image_data)
+    state = torch.cat((image_data, image_data, image_data, image_data)).unsqueeze(0)
+
+    while True:
+        # Get output from the neural network
+        output = model(state)[0]
+
+        action = torch.zeros([model.number_of_actions], dtype=torch.float32)
+        if torch.cuda.is_available():
+            action = action.cuda()
+
+        # Get action
+        action_index = torch.argmax(output)
+        if torch.cuda.is_available():
+            action_index = action_index.cuda()
+        action[action_index] = 1
+
+        # Get next state
+        image_data_1, reward, terminal = game_state.frame_step(action)
+        image_data_1 = resize_and_bgr2gray(image_data_1)
+        image_data_1 = image_to_tensor(image_data_1)
+        state_1 = torch.cat((state.squeeze(0)[1:, :, :], image_data_1)).unsqueeze(0)
+
+        state = state_1
 
 if __name__ == "__main__":
     mode = sys.argv[1]
+
+    plt.ion()
 
     if mode == 'test':
         pass
@@ -232,5 +304,10 @@ if __name__ == "__main__":
         Q = QNetwork()
         Q.to(Q.device)
 
+        Q.apply(init_weights)
         start = time.time()
+
         train(Q, start)
+
+        plt.ioff()
+        plt.show()
