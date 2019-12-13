@@ -10,7 +10,7 @@ Flappy Bird screen during training:
 
 ![Flappy Bird](images/Flappy.png)
 
-Training results after 1000 episodes:
+Training results after 1000 episodes (~7 hours):
 
 ![Flappy Bird](images/Training.png)
 
